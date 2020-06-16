@@ -27,6 +27,7 @@
 #include <X11/Xatom.h>
 #include <X11/keysymdef.h>
 
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -473,6 +474,8 @@ unmanaged_window (Window w)
 {
   char *wname;
   int i;
+  regex_t regex;
+  int regex_flags = REG_ICASE;
 
   if (!unmanaged_window_list)
     return 0;
@@ -483,11 +486,23 @@ unmanaged_window (Window w)
 
   for (i = 0; i < num_unmanaged_windows; i++)
     {
-      if (!strcmp (unmanaged_window_list[i], wname))
+      if (regcomp (&regex, unmanaged_window_list[i], regex_flags)) {
+        PRINT_ERROR (("invalid regex: %s\n", unmanaged_window_list[i]));
+        break;
+      }
+
+      if (!regexec (&regex, wname, 0, NULL, 0))
         {
+          PRINT_WARNING (("window %s matches %s\n", wname, unmanaged_window_list[i]));
+          regfree (&regex);
           free (wname);
           return 1;
         }
+      else {
+          PRINT_WARNING (("window %s doesn't match %s\n", wname, unmanaged_window_list[i]));
+      }
+
+      regfree (&regex);
     }
 
   free (wname);
