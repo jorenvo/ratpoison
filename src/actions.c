@@ -28,6 +28,8 @@
 #include <errno.h>
 #include <signal.h>
 #include <limits.h>
+#include <dirent.h>
+#include <stdlib.h>
 #include <X11/Xproto.h>
 
 #include "ratpoison.h"
@@ -1906,65 +1908,62 @@ read_command (struct argspec *spec, struct sbuf *s, struct cmdarg **arg)
   return read_string (spec, s, hist_COMMAND, colon_completions, arg);
 }
 
+void
+exec_completions_handle_dir(struct list_head *head, const char *dir_path, const char *prefix)
+{
+  unsigned long prefix_len = strlen (prefix);
+  DIR *d = opendir (dir_path);
+  struct dirent *dir;
+
+  if (d)
+    {
+      int fd = dirfd (d);
+      while ((dir = readdir (d)) != NULL)
+        {
+          const char *name = dir->d_name;
+
+          /* TODO: traverse link to see if it's a file */
+          if ((dir->d_type == DT_REG || dir->d_type == DT_LNK) &&
+              faccessat (fd, name, X_OK, 0) != -1 &&
+              prefix_len <= strlen (name) && strncmp (prefix, name, prefix_len) == 0)
+            {
+              /* PRINT_ERROR (("%s\n", name)); */
+              struct sbuf *elem = sbuf_new (0);
+              sbuf_copy (elem, name);
+              list_add_tail (&elem->node, head);
+            }
+    }
+
+    closedir (d);
+  }
+}
+
 static struct list_head *
 exec_completions (char *str)
 {
-  size_t n = 256;
-  char *partial;
-  struct sbuf *line;
-  FILE *file;
   struct list_head *head;
-  char *completion_string;
 
   /* Initialize our list. */
   head = xmalloc (sizeof (struct list_head));
   INIT_LIST_HEAD (head);
 
-  /* FIXME: A Bash dependancy?? */
-  completion_string = xsprintf("bash -c \"compgen -ac %s|sort\"", str);
-  file = popen (completion_string, "r");
-  free (completion_string);
-  if (!file)
+  /* Not allowed to modify this. */
+  char *path_ro = getenv ("PATH");
+  char *path = malloc(sizeof(char) * strlen(path_ro));
+  strcpy (path, path_ro);
+  char *orig_path = path;
+
+  PRINT_ERROR (("JVO completing with path %s\n", path));
+
+  char *dir_path;
+  do
     {
-      PRINT_ERROR (("popen failed\n"));
-      return head;
-    }
+      dir_path = strsep (&path, ":");
+      PRINT_ERROR (("JVO ---- %s\n", dir_path));
+      exec_completions_handle_dir (head, dir_path, str);
+    } while (path);
 
-  partial = xmalloc (n);
-
-  /* Read data from the file, split it into lines and store it in a
-     list. */
-  line = sbuf_new (0);
-  while (fgets (partial, n, file) != NULL)
-    {
-      /* Read a chunk from the file into our line accumulator. */
-      sbuf_concat (line, partial);
-
-      if (feof(file) || (*(sbuf_get (line) + strlen(sbuf_get (line)) - 1) == '\n'))
-        {
-          char *s;
-          struct sbuf *elem;
-
-          s = sbuf_get (line);
-
-          /* Frob the newline into */
-          if (*(s + strlen(s) - 1) == '\n')
-            *(s + strlen(s) - 1) = '\0';
-
-          /* Add our line to the list. */
-          elem = sbuf_new (0);
-          sbuf_copy (elem, s);
-          list_add_tail (&elem->node, head);
-
-          sbuf_clear (line);
-        }
-    }
-
-  sbuf_free (line);
-
-  free (partial);
-  pclose (file);
-
+  free (orig_path);
   return head;
 }
 
